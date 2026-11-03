@@ -6,16 +6,15 @@ import os
 
 # Configuração da página
 st.set_page_config(
-    page_title="Dashboard de Internação | DRE & Performance",
+    page_title="Dashboard de Internação",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Estilização CSS otimizada para ser compatível com Modo Claro e Escuro
+# Otimização de estilos
 st.markdown("""
 <style>
-    /* Estilização elegante para os containers de métrica */
     [data-testid="stMetricValue"] {
         font-size: 1.8rem !important;
         font-weight: 700 !important;
@@ -30,31 +29,43 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+def converter_valor(val):
+    """Converte números da planilha mantendo a integridade monetária."""
+    if pd.isna(val):
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip().replace('R$', '').replace(' ', '')
+    if '(' in s and ')' in s:
+        s = '-' + s.replace('(', '').replace(')', '')
+    s = s.replace('.', '').replace(',', '.')
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
 @st.cache_data
 def carregar_dados_excel(file_path_or_buffer):
-    """Carrega e limpa os dados das abas da planilha Excel."""
+    """Carrega e trata os dados das abas com precisão."""
     xls = pd.ExcelFile(file_path_or_buffer)
     setores = ['5B', 'A1', 'B1', 'C1', 'C2', 'D1', 'D2', 'D3', 'E1', 'E3', 'F3']
     
-    # 1. Ticket Médio e Produção por Setor
+    # 1. Carregar Ticket Médio
     df_tm = pd.read_excel(xls, sheet_name='Ticket Médio')
     
     sector_rows = []
     for idx, row in df_tm.iterrows():
         setor_nome = str(row.iloc[0]).strip()
         if setor_nome in setores:
-            # Extração rigorosa garantindo cruzamento correto entre receita, atendimentos e ticket médio
             sector_rows.append({
                 'Setor': setor_nome,
                 'Atend_2024': pd.to_numeric(row.iloc[1], errors='coerce'),
                 'Atend_2025': pd.to_numeric(row.iloc[2], errors='coerce'),
                 'Atend_2026_JS': pd.to_numeric(row.iloc[3], errors='coerce'),
-                
-                # Mapeamento correto das receitas cruzando com os setores
-                'Rec_2024': float(str(row.iloc[7]).replace('.', '').replace(',', '.')), # Coluna 2024 real
-                'Rec_2025': float(str(row.iloc[6]).replace('.', '').replace(',', '.')), # Coluna 2025 real
-                'Rec_2026_JS': float(str(row.iloc[8]).replace('.', '').replace(',', '.')),
-                
+                'Rec_2024': converter_valor(row.iloc[6]),
+                'Rec_2025': converter_valor(row.iloc[7]),
+                'Rec_2026_JS': converter_valor(row.iloc[8]),
                 'TM_2024': pd.to_numeric(row.iloc[11], errors='coerce'),
                 'TM_2025': pd.to_numeric(row.iloc[12], errors='coerce'),
                 'TM_2026_JS': pd.to_numeric(row.iloc[13], errors='coerce'),
@@ -62,7 +73,7 @@ def carregar_dados_excel(file_path_or_buffer):
             
     df_ticket_medio = pd.DataFrame(sector_rows)
 
-    # 2. Resumo da DRE por Setor e Geral
+    # 2. Carregar DRE
     dre_dict = {}
     for s in setores + ['Resumo Anual']:
         sheet_target = s if s in xls.sheet_names else 'Resumo Anual'
@@ -76,49 +87,47 @@ def carregar_dados_excel(file_path_or_buffer):
         
         if header_row_idx is not None:
             df_clean = df_s.iloc[header_row_idx+1:].copy()
+            df_clean = df_clean.dropna(how='all')
             df_clean.columns = ['Indicador', '2024 (Ano)', '2025 (Ano)', '2026 (Jan–Set)', '2025 (Jan–Set)', '2024 (Jan–Set)', 'Var_25_24_Ano', 'Var_26_25_JS', 'Var_25_24_JS']
             df_clean = df_clean.dropna(subset=['Indicador'])
             
             cols_num = ['2024 (Ano)', '2025 (Ano)', '2026 (Jan–Set)', '2025 (Jan–Set)', '2024 (Jan–Set)']
             for col in cols_num:
-                df_clean[col] = df_clean[col].astype(str).str.replace('.', '', regex=False).str.replace('(', '-', regex=False).str.replace(')', '', regex=False).str.replace(',', '.', regex=False)
-                df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce').fillna(0)
+                df_clean[col] = df_clean[col].apply(converter_valor)
                 
             dre_dict[s] = df_clean.reset_index(drop=True)
 
     return setores, df_ticket_medio, dre_dict
 
-# Localização do ficheiro Excel
+
 EXCEL_FILE = 'Analise_Internacao_2024-2026 (5).xlsx'
 
 st.sidebar.image("https://img.icons8.com/color/96/hospital-2.png", width=60)
 st.sidebar.title("Hospital Dashboard")
 st.sidebar.markdown("---")
 
-uploaded_file = st.sidebar.file_uploader("Upload da Planilha Excel (opcional)", type=["xlsx"])
+uploaded_file = st.sidebar.file_uploader("Carregar planilha (opcional)", type=["xlsx"])
 
 if uploaded_file:
     setores, df_tm, dre_dict = carregar_dados_excel(uploaded_file)
 elif os.path.exists(EXCEL_FILE):
     setores, df_tm, dre_dict = carregar_dados_excel(EXCEL_FILE)
 else:
-    st.error("⚠️ Envie a planilha `Analise_Internacao_2024-2026 (5).xlsx` no menu lateral para continuar.")
+    st.error("⚠️ Envie a planilha `.xlsx` no menu lateral para visualizar os dados.")
     st.stop()
 
-# Filtros na Sidebar
+# Filtros
 setor_selecionado = st.sidebar.selectbox("SELECIONE O SETOR", ["Todos os Setores (Geral)"] + setores)
 visao_temporal = st.sidebar.radio("PERÍODO DE ANÁLISE DRE", ["Jan–Set (2024 vs 2025 vs 2026)", "Ano Fechado (2024 vs 2025)"])
 
 st.sidebar.markdown("---")
-st.sidebar.caption("📊 Analítico de Internação (2024–2026)")
 
-# --- TÍTULO PRINCIPAL ---
+# Título
 st.title(f"📊 Dashboard de Internação — {setor_selecionado}")
 st.markdown("Acompanhamento consolidado da **Produção (Atendimentos)**, **Ticket Médio** e **DRE Hospitalar**.")
 
-# --- CÁLCULO DOS INDICADORES (KPIs) ---
+# CÁLCULOS
 if setor_selecionado == "Todos os Setores (Geral)":
-    # Valores consolidados do Resumo Anual oficial
     df_dre_curr = dre_dict.get('Resumo Anual', pd.DataFrame())
     
     rec_2024 = df_dre_curr.loc[df_dre_curr['Indicador'].str.contains('Receita bruta', case=False, na=False), '2024 (Ano)'].values[0]
@@ -133,7 +142,6 @@ if setor_selecionado == "Todos os Setores (Geral)":
     tm_2025 = rec_2025 / atend_2025
     tm_2026_js = rec_2026_js / atend_2026_js
 else:
-    # Valores específicos do Setor
     row_s = df_tm[df_tm['Setor'] == setor_selecionado].iloc[0]
     rec_2024 = row_s['Rec_2024']
     rec_2025 = row_s['Rec_2025']
@@ -149,7 +157,7 @@ else:
     
     df_dre_curr = dre_dict.get(setor_selecionado, pd.DataFrame())
 
-# Cálculo das Variações Percentuais
+# Percentuais
 if "Jan–Set" in visao_temporal:
     rec_2025_prop = df_dre_curr.loc[df_dre_curr['Indicador'].str.contains('Receita bruta', case=False, na=False), '2025 (Jan–Set)'].values[0] if not df_dre_curr.empty else rec_2025*0.75
     var_rec = ((rec_2026_js - rec_2025_prop) / rec_2025_prop) * 100 if rec_2025_prop else 0
@@ -170,7 +178,6 @@ else:
     atend_destaque = atend_2025
     tm_destaque = tm_2025
 
-# Margem de Contribuição da DRE
 margem_contrib_val = 0
 if not df_dre_curr.empty:
     row_mc = df_dre_curr[df_dre_curr['Indicador'].str.contains('Margem de contribuição', case=False, na=False)]
@@ -178,13 +185,13 @@ if not df_dre_curr.empty:
         col_target = '2026 (Jan–Set)' if "Jan–Set" in visao_temporal else '2025 (Ano)'
         margem_contrib_val = row_mc[col_target].values[0]
 
-# --- PAINEL DE METRICAS (KPIs NATIVOS DO STREAMLIT) ---
+# KPIs Nativos
 c1, c2, c3, c4 = st.columns(4)
 
 with c1:
     st.metric(
         label=f"Receita Bruta ({'2026 JS' if 'Jan–Set' in visao_temporal else '2025'})",
-        value=f"R$ {rec_destaque/1e6:.2f}M",
+        value=f"R$ {rec_destaque/1e6:.1f}M",
         delta=f"{var_rec:+.1f}% ({periodo_label})"
     )
 
@@ -199,20 +206,20 @@ with c3:
     st.metric(
         label="Ticket Médio",
         value=f"R$ {tm_destaque:,.0f}".replace(",", "."),
-        delta=f"{var_tm:+.1f}% de Variação"
+        delta=f"{var_tm:+.1f}% Variação"
     )
 
 with c4:
     st.metric(
         label="Margem Contribuição",
-        value=f"R$ {margem_contrib_val/1e6:.2f}M",
+        value=f"R$ {margem_contrib_val/1e6:.1f}M",
         delta="Resultado DRE",
         delta_color="normal"
     )
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# --- GRÁFICOS PRINCIPAIS ---
+# GRÁFICOS PRINCIPAIS
 g1, g2 = st.columns([1.25, 1])
 
 with g1:
@@ -226,18 +233,16 @@ with g1:
     
     fig_combo = go.Figure()
     
-    # Barras de Receita Bruta
     fig_combo.add_trace(go.Bar(
         x=df_chart_evo['Período'],
         y=df_chart_evo['Receita Bruta (R$)'],
         name='Receita Bruta (R$)',
         marker_color='#28a745',
         text=[f"R$ {v/1e6:.1f}M" for v in df_chart_evo['Receita Bruta (R$)']],
-        textposition='inside', # Rótulo dentro da barra para evitar sobreposição
+        textposition='inside',
         insidetextanchor='middle'
     ))
     
-    # Linha de Atendimentos
     fig_combo.add_trace(go.Scatter(
         x=df_chart_evo['Período'],
         y=df_chart_evo['Atendimentos'],
@@ -245,7 +250,7 @@ with g1:
         yaxis='y2',
         mode='lines+markers+text',
         line=dict(color='#17a2b8', width=3),
-        marker=dict(size=9),
+        marker=dict(size=8),
         text=[f"{int(v):,}".replace(",", ".") for v in df_chart_evo['Atendimentos']],
         textposition='top center'
     ))
@@ -276,7 +281,7 @@ with g2:
         text=[f"R$ {v:,.0f}".replace(",", ".") for v in df_chart_tm['Ticket Médio']],
         color_discrete_sequence=['#00b4d8']
     )
-    fig_tm.update_traces(textposition="top center", line=dict(width=3), marker=dict(size=9))
+    fig_tm.update_traces(textposition="top center", line=dict(width=3), marker=dict(size=8))
     fig_tm.update_layout(
         template='plotly_dark' if st.get_option("theme.base") == "dark" else 'plotly_white',
         height=380,
@@ -287,7 +292,7 @@ with g2:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# --- SEÇÃO SEGUNDÁRIA: DRE E COMPARATIVO DE SETORES ---
+# TABELA DRE E COMPARATIVO DE SETORES
 sec_col1, sec_col2 = st.columns([1.1, 0.9])
 
 with sec_col1:
@@ -304,7 +309,7 @@ with sec_col1:
         
         df_display_filtered = df_display[df_display['Indicador'].str.strip().isin(indicadores_filtro)].copy()
         
-        # Formatação financeira
+        # Formatação das colunas para evitar o bug de carregamento
         for col in ['2024 (Ano)', '2025 (Ano)', '2026 (Jan–Set)']:
             if col in df_display_filtered.columns:
                 df_display_filtered[col] = df_display_filtered[col].apply(
@@ -344,4 +349,4 @@ with sec_col2:
     st.plotly_chart(fig_sector, use_container_width=True)
 
 st.markdown("---")
-st.caption("Dashboard de Internação | Dados atualizados e validados com a planilha oficial 2024–2026.")
+st.caption("Dashboard de Internação | Dados oficiais 2024–2026.")
